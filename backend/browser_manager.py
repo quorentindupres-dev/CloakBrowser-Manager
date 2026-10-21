@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import socket
 import time
 import urllib.request
@@ -28,8 +29,10 @@ from .vnc_manager import VNCManager
 
 logger = logging.getLogger("cloakbrowser.manager.browser")
 
-BITWARDEN_EXTENSION_ID = "ecblnbbmmimjhikjdpekghmjhmnboiff"
-BITWARDEN_SEED_PROFILE = "bitwarden-auth-seed"
+BITWARDEN_EXTENSION_ID = "chfhbihjjbdiggdbioadkpofibadomhl"
+BITWARDEN_SEED_PROFILE = "bw-g"
+CLOAK_HOME = Path(os.getenv("CLOAK_HOME", Path.home() / ".cloakbrowser"))
+DEFAULT_BITWARDEN_EXTENSION_PATH = CLOAK_HOME / "extensions" / "bitwarden" / "current"
 
 
 UPGRADE_URL = "https://cloakbrowser.dev/#pricing"
@@ -98,35 +101,142 @@ def _validate_proxy(url: str) -> None:
         raise ValueError(f"Proxy URL missing port: {url}")
 
 
+def _resolve_bitwarden_seed_dir() -> Path:
+    seed_name = os.getenv("BITWARDEN_SEED_PROFILE", BITWARDEN_SEED_PROFILE)
+    operator_file = CLOAK_HOME / "operator.json"
+    if operator_file.exists():
+        try:
+            op_id = json.loads(operator_file.read_text()).get("id")
+            if op_id:
+                seed_name = f"bw-{op_id}"
+        except Exception:
+            pass
+    seed_dir = CLOAK_HOME / "seeds" / seed_name
+    if seed_dir.exists():
+        return seed_dir
+    return CLOAK_HOME / "profiles" / seed_name
+
+
+def _resolve_native_profile_dir(profile_name: str) -> Path:
+    profiles_root = Path(os.getenv("CLOAK_NATIVE_PROFILES_ROOT", CLOAK_HOME / "profiles"))
+    flat = profiles_root / profile_name
+    if flat.exists():
+        return flat
+    group = profile_name.split("-")[0]
+    return profiles_root / group / profile_name
+
+
+def _ensure_bitwarden_defaults(user_data_dir: Path, extension_paths: list[str] | None = None) -> list[str]:
+    """Ensure every profile has the Bitwarden extension loaded and seeded by default."""
+    paths = list(extension_paths or [])
+    if DEFAULT_BITWARDEN_EXTENSION_PATH.exists():
+        bw_str = str(DEFAULT_BITWARDEN_EXTENSION_PATH)
+        if bw_str not in paths:
+            paths.insert(0, bw_str)
+
+    seed_dir = _resolve_bitwarden_seed_dir()
+    extension_id = os.getenv("BITWARDEN_EXTENSION_ID", BITWARDEN_EXTENSION_ID)
+    if not seed_dir.exists() or user_data_dir.resolve() == seed_dir.resolve():
+        return paths
+
+    for rel in (
+        Path("Default") / "Local Extension Settings" / extension_id,
+        Path("Default") / "Managed Extension Settings" / extension_id,
+    ):
+        src = seed_dir / rel
+        dst = user_data_dir / rel
+        if src.exists() and not dst.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            (dst / "LOCK").unlink(missing_ok=True)
+
+    seed_preferences = seed_dir / "Default" / "Secure Preferences"
+    target_preferences = user_data_dir / "Default" / "Secure Preferences"
+    if seed_preferences.exists():
+        try:
+            seed = json.loads(seed_preferences.read_text())
+            registration = seed.get("extensions", {}).get("settings", {}).get(extension_id)
+            if registration:
+                target_preferences.parent.mkdir(parents=True, exist_ok=True)
+                target = json.loads(target_preferences.read_text()) if target_preferences.exists() else {}
+                target.setdefault("extensions", {}).setdefault("settings", {})[extension_id] = registration
+                temporary = target_preferences.with_suffix(".tmp")
+                temporary.write_text(json.dumps(target, separators=(",", ":")))
+                temporary.replace(target_preferences)
+        except Exception as exc:
+            logger.debug("Bitwarden Secure Preferences sync skipped for %s: %s", user_data_dir, exc)
+
+    return paths
+
+
+async def _auto_unlock_bitwarden_context(context: Any) -> None:
+    """Restore Bitwarden session and auto-unlock local keys from ~/.cloakbrowser/secrets/bw-session.json."""
+    session_file = CLOAK_HOME / "secrets" / "bw-session.json"
+    if not session_file.exists():
+        return
+    try:
+        session_payload = json.loads(session_file.read_text())
+        if not isinstance(session_payload, dict) or "session-key" not in session_payload:
+            return
+        local_payload: dict[str, Any] = {
+            "global_vaultBrowserDefaultPasswordManagerPrompt_defaultPasswordManagerPromptDismissed": {"__json__": True, "value": "true"},
+            "global_vaultBrowserIntroCarousel_introCarouselDismissed": {"__json__": True, "value": "true"},
+        }
+        for key, entry in session_payload.items():
+            if key.startswith("user_") and key.endswith("_crypto_userKey") and isinstance(entry, dict):
+                user_id = key[len("user_"):-len("_crypto_userKey")]
+                parsed = json.loads(entry.get("value", "{}"))
+                key_b64 = parsed.get("keyB64")
+                if user_id and key_b64:
+                    local_payload[f"{user_id}_user_auto"] = {"__json__": True, "value": json.dumps(key_b64)}
+                    local_payload[f"user_{user_id}_vaultTimeoutSettings_vaultTimeout"] = {"__json__": True, "value": json.dumps("never")}
+                    local_payload[f"user_{user_id}_vaultTimeoutSettings_vaultTimeoutAction"] = {"__json__": True, "value": json.dumps("lock")}
+
+        ext_id = os.getenv("BITWARDEN_EXTENSION_ID", BITWARDEN_EXTENSION_ID)
+        workers = [w for w in getattr(context, "service_workers", []) if ext_id in w.url]
+        if workers:
+            await workers[0].evaluate(
+                """async ({ s, l }) => {
+                    if (l) await globalThis.chrome.storage.local.set(l);
+                    await globalThis.chrome.storage.session.set(s);
+                }""",
+                {"s": session_payload, "l": local_payload},
+            )
+    except Exception as exc:
+        logger.debug("Bitwarden auto-unlock in Manager context skipped: %s", exc)
+
+
 def _repair_native_extension_registration(profile_name: str) -> bool:
     """Restore Bitwarden's enabled registration from the authenticated seed profile."""
-    seed_name = os.getenv("BITWARDEN_SEED_PROFILE", BITWARDEN_SEED_PROFILE)
-    if profile_name == seed_name:
+    seed_dir = _resolve_bitwarden_seed_dir()
+    target_dir = _resolve_native_profile_dir(profile_name)
+    if target_dir.resolve() == seed_dir.resolve():
         return False
 
-    profiles_root = Path(os.getenv("CLOAK_NATIVE_PROFILES_ROOT", Path.home() / ".cloakbrowser/profiles"))
     extension_id = os.getenv("BITWARDEN_EXTENSION_ID", BITWARDEN_EXTENSION_ID)
-    seed_preferences = profiles_root / seed_name / "Default" / "Secure Preferences"
-    target_preferences = profiles_root / profile_name / "Default" / "Secure Preferences"
-    if not seed_preferences.exists() or not target_preferences.exists():
+    seed_preferences = seed_dir / "Default" / "Secure Preferences"
+    target_preferences = target_dir / "Default" / "Secure Preferences"
+    if not seed_preferences.exists():
         return False
 
     seed = json.loads(seed_preferences.read_text())
-    target = json.loads(target_preferences.read_text())
     registration = seed.get("extensions", {}).get("settings", {}).get(extension_id)
     if not registration:
         return False
 
+    target_preferences.parent.mkdir(parents=True, exist_ok=True)
+    target = json.loads(target_preferences.read_text()) if target_preferences.exists() else {}
     target.setdefault("extensions", {}).setdefault("settings", {})[extension_id] = registration
     temporary = target_preferences.with_suffix(".tmp")
     temporary.write_text(json.dumps(target, separators=(",", ":")))
-    temporary.chmod(target_preferences.stat().st_mode & 0o777)
+    if target_preferences.exists():
+        temporary.chmod(target_preferences.stat().st_mode & 0o777)
     temporary.replace(target_preferences)
     return True
 
 
 def _native_profile_running(processes: str, profile_name: str) -> bool:
-    profile_path = Path.home() / ".cloakbrowser" / "profiles" / profile_name
+    profile_path = _resolve_native_profile_dir(profile_name)
     needle = f"--user-data-dir={profile_path}"
     return any(needle in line for line in processes.splitlines())
 
@@ -575,6 +685,9 @@ class BrowserManager:
             if proxy:
                 _validate_proxy(proxy)
 
+            extension_paths = _ensure_bitwarden_defaults(
+                user_data_dir, profile.get("extension_paths") or []
+            )
             launch_options: dict[str, Any] = {
                 "user_data_dir": profile["user_data_dir"],
                 "headless": False,
@@ -586,7 +699,7 @@ class BrowserManager:
                 "human_preset": profile.get("human_preset", "default"),
                 "geoip": bool(profile.get("geoip", False)),
                 "color_scheme": profile.get("color_scheme") or None,
-                "extension_paths": profile.get("extension_paths") or [],
+                "extension_paths": extension_paths,
                 "license_key": self.license_key,
                 "release_channel": self.release_channel,
             }
@@ -617,6 +730,7 @@ class BrowserManager:
                         raise lic
                     await self._wait_for_cdp(cdp_port, denial_path=denial_path)
                     leave_dialogs_open(context)
+                    await _auto_unlock_bitwarden_context(context)
                     break
                 except asyncio.CancelledError:
                     if context is not None:

@@ -17,6 +17,16 @@ from .runtime import resolve_runtime
 RUNTIME = resolve_runtime()
 DATA_DIR = RUNTIME.data_dir
 DB_PATH = DATA_DIR / "profiles.db"
+DEFAULT_BW_EXT = Path(os.getenv("CLOAK_HOME", Path.home() / ".cloakbrowser")) / "extensions" / "bitwarden" / "current"
+
+
+def _default_extension_paths(paths: list[str] | None = None) -> list[str]:
+    out = list(paths or [])
+    if DEFAULT_BW_EXT.exists():
+        bw_str = str(DEFAULT_BW_EXT)
+        if bw_str not in out:
+            out.insert(0, bw_str)
+    return out
 
 _PROFILE_COLUMNS = (
     "id", "name", "fingerprint_seed", "proxy", "timezone", "locale",
@@ -220,7 +230,7 @@ def create_profile(
         "human_preset": fields.get("human_preset", "default"), "geoip": fields.get("geoip", True),
         "clipboard_sync": fields.get("clipboard_sync", True), "auto_launch": fields.get("auto_launch", False),
         "color_scheme": fields.get("color_scheme"), "launch_args": json.dumps(fields.get("launch_args") or []),
-        "extension_paths": json.dumps(fields.get("extension_paths") or []),
+        "extension_paths": json.dumps(_default_extension_paths(fields.get("extension_paths"))),
         "allow_3p_cookies": fields.get("allow_3p_cookies", True),
         "set_google_default": fields.get("set_google_default", True),
         "capture_preview": fields.get("capture_preview", True),
@@ -317,6 +327,7 @@ def sync_native_profiles(path: Path | None = None) -> int:
                 f"--native-profile={native_name}",
                 *[f"--start-url={url}" for url in entry.get("start_urls", [])],
             ],
+            "extension_paths": _default_extension_paths(entry.get("extension_paths")),
             "notes": entry.get("notes"),
             "tags": entry.get("tags", []),
             "clipboard_sync": False,
