@@ -11,8 +11,7 @@ import { api, type ProxyHealth, type ProxyHealthRow, type ProxyVerdict } from ".
  */
 
 const POLL_MS = 5000;
-/** Add-on visibility, remembered per browser. Default on: the line is the first thing worth knowing. */
-const SHOW_KEY = "cloak.addon.proxySpeed";
+/** The line is the first thing worth knowing, so the add-on is shown on every load; hiding lasts for the session only. */
 
 const TONE: Record<ProxyVerdict, { dot: string; bar: string; text: string; label: string }> = {
   slow: { dot: "bg-red-500", bar: "bg-red-500", text: "text-red-400", label: "too slow to draw" },
@@ -45,21 +44,7 @@ export function ProxySpeedBadge({ nativeName, sidebarOpen = true }: { nativeName
   const [data, setData] = useState<ProxyHealth | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(true);
-  const [shown, setShown] = useState(() => {
-    try {
-      return window.localStorage.getItem(SHOW_KEY) !== "0";
-    } catch {
-      return true;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(SHOW_KEY, shown ? "1" : "0");
-    } catch {
-      /* a blocked storage must not break the app */
-    }
-  }, [shown]);
+  const [shown, setShown] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -165,15 +150,30 @@ export function ProxySpeedBadge({ nativeName, sidebarOpen = true }: { nativeName
             {row.verdict === "slow" && " · " + tone.label}
           </div>
 
-          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-gray-500">
-            {row.tls_sec !== null && <span>TLS {row.tls_sec.toFixed(2)}s</span>}
-            {row.family && <span className="rounded bg-surface-0 px-1 py-px uppercase">{row.family}</span>}
+          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-gray-400">
+            <span className="max-w-[9rem] truncate" title={row.timezone ?? undefined}>
+              {[row.city, row.country].filter(Boolean).join(", ") || "place unknown"}
+            </span>
+            {row.place_match === false && (
+              <span className="rounded bg-red-500/15 px-1 py-px text-red-400" title={`exit is ${row.timezone ?? "?"}, profile expects ${row.profile_timezone ?? "?"}`}>
+                place
+              </span>
+            )}
+            {row.family && <span className="rounded bg-surface-0 px-1 py-px uppercase text-gray-500">{row.family}</span>}
             {row.drifted.length > 0 && (
               <span className="rounded bg-amber-500/15 px-1 py-px text-amber-400" title={`${row.drifted.join(", ")} address moving`}>
                 drift
               </span>
             )}
-            {row.ip && <span className="ml-auto max-w-[6.5rem] truncate tabular-nums">{row.ip}</span>}
+          </div>
+
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-gray-500">
+            {row.tls_sec !== null && <span>TLS {row.tls_sec.toFixed(2)}s</span>}
+            {row.ip && <span className="ml-auto max-w-[7rem] truncate tabular-nums">{row.ip}</span>}
+          </div>
+
+          <div className="mt-1 border-t border-border/60 pt-1 text-[10px] text-gray-600">
+            expect ≥{expectation} kbps · TLS ≤{data?.expectation.tls_sec ?? 2.5}s
           </div>
 
           {row.kbps === null && (

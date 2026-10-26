@@ -73,6 +73,12 @@ export interface ProxyHealthRow {
   drifted: string[];
   country: string | null;
   city: string | null;
+  /** Timezone the exit reports. */
+  timezone: string | null;
+  /** Timezone the profile is set to. */
+  profile_timezone: string | null;
+  /** False when the exit sits in a different clock than the profile: the mismatch a login notices. */
+  place_match: boolean | null;
   network: string | null;
   kbps: number | null;
   tls_sec: number | null;

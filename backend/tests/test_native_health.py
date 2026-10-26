@@ -19,10 +19,13 @@ def _home(tmp_path: Path) -> Path:
     return home
 
 
-def _record(home: Path, name: str, ref: str, exit_info: dict | None = None) -> None:
+def _record(home: Path, name: str, ref: str, exit_info: dict | None = None, timezone: str | None = None) -> None:
     path = home / "profiles" / name.split("-")[0] / name / "cloak.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"browser": {"proxy": {"ref": ref}}, "history": {"exit": exit_info or {}}}))
+    browser: dict = {"proxy": {"ref": ref}}
+    if timezone:
+        browser["timezone"] = timezone
+    path.write_text(json.dumps({"browser": browser, "history": {"exit": exit_info or {}}}))
 
 
 def _registry(home: Path, entries: dict) -> None:
@@ -42,7 +45,7 @@ def _profile(name: str, status: str = "running") -> dict:
 
 def test_a_slow_line_is_named_slow_and_scored_against_the_expectation(tmp_path, monkeypatch):
     home = _use(tmp_path, monkeypatch)
-    _record(home, "facebook-013", "px-013", {"ip": "107.77.215.36", "family": "v6", "drifted": ["v4"]})
+    _record(home, "facebook-013", "px-013", {"ip": "107.77.215.36", "country": "US", "city": "Gainesville", "timezone": "America/New_York", "family": "v6", "drifted": ["v4"]})
     _registry(home, {"px-013": {"server": "http://gw:10080", "ip": "107.77.215.36", "country": "US", "city": "Gainesville", "network": "AT&T", "speed": {"ok": True, "kbps": 12, "tlsSec": 0.86}, "lastScore": {"at": "2026-10-26T15:00:00Z", "verdict": "green"}}})
 
     out = native_health.proxy_health([_profile("facebook-013")])
@@ -55,6 +58,9 @@ def test_a_slow_line_is_named_slow_and_scored_against_the_expectation(tmp_path, 
     assert row["family"] == "v6"
     assert row["drifted"] == ["v4"]
     assert row["network"] == "AT&T"
+    assert row["city"] == "Gainesville"
+    assert row["country"] == "US"
+    assert row["timezone"] == "America/New_York"
 
 
 def test_a_fast_line_is_good_and_a_slow_handshake_is_its_own_verdict(tmp_path, monkeypatch):
@@ -114,3 +120,16 @@ def test_the_endpoint_answers_with_the_expectation(app_client: TestClient):
     assert body["expectation"]["kbps"] == 100
     assert body["expectation"]["tls_sec"] == 2.5
     assert isinstance(body["profiles"], list)
+
+
+def test_the_exit_place_is_compared_with_the_clock_the_profile_expects(tmp_path, monkeypatch):
+    home = _use(tmp_path, monkeypatch)
+    _record(home, "facebook-013", "px-013", {"country": "US", "city": "Gainesville", "timezone": "America/New_York"}, timezone="America/New_York")
+    _record(home, "facebook-014", "px-014", {"country": "FR", "city": "Paris", "timezone": "Europe/Paris"}, timezone="America/New_York")
+    _registry(home, {"px-013": {"speed": {"ok": True, "kbps": 140, "tlsSec": 0.8}}, "px-014": {"speed": {"ok": True, "kbps": 140, "tlsSec": 0.8}}})
+
+    rows = {r["profile"]: r for r in native_health.proxy_health([_profile("facebook-013"), _profile("facebook-014")])["profiles"]}
+    assert rows["facebook-013"]["place_match"] is True
+    assert rows["facebook-014"]["place_match"] is False
+    assert rows["facebook-014"]["timezone"] == "Europe/Paris"
+    assert rows["facebook-014"]["profile_timezone"] == "America/New_York"

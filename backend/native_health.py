@@ -67,6 +67,9 @@ def _row(profile: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any] | 
     kbps = speed.get("kbps") if isinstance(speed.get("kbps"), (int, float)) else None
     tls_sec = speed.get("tlsSec") if isinstance(speed.get("tlsSec"), (int, float)) else None
     exit_info = record.get("history", {}).get("exit") or {}
+    record_browser = record.get("browser") or {}
+    expected_tz = record_browser.get("timezone") or None
+    exit_tz = exit_info.get("timezone") or None
     score = entry.get("lastScore") or {}
     return {
         "profile": name,
@@ -77,8 +80,12 @@ def _row(profile: dict[str, Any], registry: dict[str, Any]) -> dict[str, Any] | 
         "ip": exit_info.get("ip") or entry.get("ip"),
         "family": exit_info.get("family"),
         "drifted": exit_info.get("drifted") or [],
-        "country": entry.get("country"),
-        "city": entry.get("city"),
+        "country": exit_info.get("country") or entry.get("country"),
+        "city": exit_info.get("city") or entry.get("city"),
+        "timezone": exit_tz,
+        "profile_timezone": expected_tz,
+        # Does the exit sit where the profile says it should? A US clock on a French exit is the mismatch a login sees.
+        "place_match": None if not (exit_tz and expected_tz) else exit_tz == expected_tz,
         "network": entry.get("network"),
         "kbps": round(kbps) if kbps is not None else None,
         "tls_sec": round(tls_sec, 2) if tls_sec is not None else None,
