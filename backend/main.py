@@ -39,6 +39,7 @@ load_env_file()
 
 from . import artifacts
 from . import database as db
+from . import native_health
 from cloakbrowser.license import CloakBrowserLicenseError
 
 from .browser_manager import (
@@ -611,6 +612,16 @@ async def reorder_profiles(req: ReorderRequest):
 async def sync_native():
     """Reload native profiles from the registry (built by `cloak registry`). No restart needed."""
     return {"synced": db.sync_native_profiles()}
+
+
+@app.get("/api/native/proxy-health")
+async def native_proxy_health():
+    """Exit speed per native profile and the expectation each is judged against.
+
+    Read-only: it reads the shared proxy list and the profile records, never a browser and never a secret. The badge in
+    the corner polls it; `cloak proxy check <profile> --speed` is what refreshes a measurement.
+    """
+    return native_health.proxy_health(db.list_profiles())
 
 
 @app.get("/api/profiles/{profile_id}", response_model=ProfileResponse)

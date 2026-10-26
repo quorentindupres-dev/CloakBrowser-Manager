@@ -13,6 +13,7 @@ import { SystemStatusBadge } from "./components/SystemStatusBadge";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { LaunchErrorBanner } from "./components/LaunchErrorBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { ProxySpeedBadge } from "./components/ProxySpeedBadge";
 import { LoginPage } from "./components/LoginPage";
 
 type AuthState = "checking" | "required" | "ok" | "error";
@@ -124,6 +125,9 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
   }, []);
 
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
+  // The corner badge speaks the profile's native name (facebook-013), not the Manager's display title.
+  const selectedNativeName =
+    selected?.launch_args.find((arg) => arg.startsWith("--native-profile="))?.slice("--native-profile=".length) ?? null;
 
   // Switching profiles clears the banner (like X); a post-handshake denial
   // (profile.last_error, arriving via the poll) shows only while its own
@@ -248,6 +252,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
 
   return (
     <div className="h-screen flex flex-col">
+      <ProxySpeedBadge nativeName={selectedNativeName} sidebarOpen={sidebarOpen} />
       {settingsOpen && (
         <SettingsPanel
           onClose={() => setSettingsOpen(false)}
