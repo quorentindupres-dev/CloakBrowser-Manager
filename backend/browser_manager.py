@@ -29,6 +29,10 @@ from .vnc_manager import VNCManager
 
 logger = logging.getLogger("cloakbrowser.manager.browser")
 
+
+class ProfileNotRunningError(RuntimeError):
+    """Raised when an action needs a browser that is not up."""
+
 BITWARDEN_EXTENSION_ID = "chfhbihjjbdiggdbioadkpofibadomhl"
 BITWARDEN_SEED_PROFILE = "bw-g"
 CLOAK_HOME = Path(os.getenv("CLOAK_HOME", Path.home() / ".cloakbrowser"))
@@ -892,6 +896,56 @@ class BrowserManager:
             finally:
                 self._release_stopping(profile_id)
             raise
+
+    async def focus(self, profile_id: str, profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Bring a running profile's tab, and its window, to the front.
+
+        CDP `Page.bringToFront` raises the tab inside Chromium and Chromium raises the window that holds it; on macOS the
+        app is then activated so the window is not behind Terminal. Best effort: a composed window manager may refuse,
+        and that must not fail the request.
+        """
+        running = self.running.get(profile_id)
+        # After a Manager restart the browser is still up but no longer in `running`. The record names the native
+        # profile, and the record's cdp port is where that browser listens — so focus keeps working across restarts.
+        port = running.cdp_port if running else None
+        if port is None:
+            native = self._native_profile_name(profile or {})
+            port = self._native_cdp_port(native) if native else None
+        if port is None:
+            raise ProfileNotRunningError(f"Profile {profile_id} is not running")
+        try:
+            self._cdp_targets(port)
+        except Exception as exc:
+            raise ProfileNotRunningError(f"Nothing is listening on CDP {port} for {profile_id}") from exc
+        page: dict[str, Any] = {}
+        try:
+            targets = await asyncio.to_thread(self._cdp_targets, port)
+            page = next((t for t in targets if t.get("type") == "page"), {}) or {}
+            url = page.get("webSocketDebuggerUrl")
+            if url:
+                import websockets
+
+                async with websockets.connect(url, max_size=None) as ws:
+                    await ws.send(json.dumps({"id": 1, "method": "Page.bringToFront"}))
+                    await asyncio.wait_for(ws.recv(), timeout=3)
+        except Exception as exc:  # a missing page or a closed socket is not an error to the caller
+            logger.debug("focus: CDP bringToFront skipped for %s: %s", profile_id, exc)
+        if self.runtime.host_os == "macos":
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["osascript", "-e", 'tell application "Chromium" to activate'],
+                    capture_output=True,
+                    timeout=3,
+                )
+            except Exception as exc:
+                logger.debug("focus: activate skipped: %s", exc)
+        return {"ok": True, "port": port, "tab": page.get("title"), "url": page.get("url")}
+
+    @staticmethod
+    def _cdp_targets(port: int) -> list[dict[str, Any]]:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as res:
+            return json.loads(res.read().decode())
 
     @staticmethod
     def _native_profile_name(profile: dict[str, Any]) -> str | None:

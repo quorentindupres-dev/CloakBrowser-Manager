@@ -246,6 +246,9 @@ export const api = {
 
   proxyHealth: () => request<ProxyHealth>("/api/native/proxy-health"),
 
+  /** Raise a running profile's tab and window: the browser it already owns. */
+  focusProfile: (id: string) => request<{ ok: boolean; port: number; tab?: string; url?: string }>(`/api/profiles/${id}/focus`, { method: "POST" }),
+
   reorderProfiles: (ids: string[]) =>
     request<{ ok: boolean }>("/api/profiles/reorder", {
       method: "POST",

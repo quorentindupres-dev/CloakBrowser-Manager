@@ -1602,6 +1602,18 @@ async def cdp_info(profile_id: str):
     }
 
 
+@app.post("/api/profiles/{profile_id}/focus")
+async def focus_profile(profile_id: str):
+    """Bring a running profile's tab and window to the front."""
+    profile = db.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    try:
+        return await browser_mgr.focus(profile_id, profile)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/profiles/{profile_id}/screenshot")
 async def profile_screenshot(profile_id: str):
     """Serve the last captured browser preview (JPEG). 404 when none exists yet."""

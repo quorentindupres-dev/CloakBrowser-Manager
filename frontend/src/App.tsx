@@ -124,6 +124,16 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
     api.checkUpdate().then(setUpdateInfo).catch(() => setUpdateInfo(null));
   }, []);
 
+  // Bring a profile's window forward. The Manager raises its tab over CDP and activates the app; a stopped profile
+  // has nothing to raise, so the selection stays on it instead of failing silently.
+  const focusProfile = useCallback(async (id: string) => {
+    try {
+      await api.focusProfile(id);
+    } catch {
+      setSelectedId(id);
+    }
+  }, []);
+
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
   // The corner badge speaks the profile's native name (facebook-013), not the Manager's display title.
   const selectedNativeName =
@@ -275,6 +285,7 @@ function AppContent({ authRequired, onLogout }: AppContentProps) {
             onSelect={handleSelect}
             onNew={handleNew}
             onReorder={reorder}
+            onFocus={focusProfile}
           />
         </div>
       )}
