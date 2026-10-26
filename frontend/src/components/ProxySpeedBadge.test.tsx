@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const proxyHealth = vi.fn();
@@ -73,6 +73,22 @@ describe("ProxySpeedBadge", () => {
 
     await waitFor(() => expect(screen.getByText(/no measurement yet/)).toBeTruthy());
     expect(screen.getByText(/cloak proxy check facebook-013 --speed/)).toBeTruthy();
+  });
+
+  it("hides and comes back as an add-on, and remembers the choice", async () => {
+    proxyHealth.mockResolvedValue(health([row()]));
+    window.localStorage.clear();
+    const first = render(<ProxySpeedBadge nativeName={null} sidebarOpen={false} />);
+    await waitFor(() => expect(screen.getByTestId("proxy-speed-badge")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("Hide the proxy-speed add-on"));
+    expect(screen.queryByTestId("proxy-speed-badge")).toBeNull();
+    expect(window.localStorage.getItem("cloak.addon.proxySpeed")).toBe("0");
+    fireEvent.click(screen.getByTestId("proxy-speed-restore"));
+    expect(screen.getByTestId("proxy-speed-badge")).toBeTruthy();
+    first.unmount();
+    // A new mount reads the remembered choice.
+    render(<ProxySpeedBadge nativeName={null} sidebarOpen={false} />);
+    expect(screen.getByTestId("proxy-speed-badge")).toBeTruthy();
   });
 
   it("says nothing is proxied instead of inventing a number", async () => {

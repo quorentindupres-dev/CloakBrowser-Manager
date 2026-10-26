@@ -11,6 +11,8 @@ import { api, type ProxyHealth, type ProxyHealthRow, type ProxyVerdict } from ".
  */
 
 const POLL_MS = 5000;
+/** Add-on visibility, remembered per browser. Default on: the line is the first thing worth knowing. */
+const SHOW_KEY = "cloak.addon.proxySpeed";
 
 const TONE: Record<ProxyVerdict, { dot: string; bar: string; text: string; label: string }> = {
   slow: { dot: "bg-red-500", bar: "bg-red-500", text: "text-red-400", label: "too slow to draw" },
@@ -43,6 +45,21 @@ export function ProxySpeedBadge({ nativeName, sidebarOpen = true }: { nativeName
   const [data, setData] = useState<ProxyHealth | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(true);
+  const [shown, setShown] = useState(() => {
+    try {
+      return window.localStorage.getItem(SHOW_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SHOW_KEY, shown ? "1" : "0");
+    } catch {
+      /* a blocked storage must not break the app */
+    }
+  }, [shown]);
 
   useEffect(() => {
     let alive = true;
@@ -87,6 +104,20 @@ export function ProxySpeedBadge({ nativeName, sidebarOpen = true }: { nativeName
   const tone = TONE[row?.verdict ?? "unmeasured"];
   const described = row ? describe(row, expectation) : null;
 
+  if (!shown) {
+    return (
+      <button
+        type="button"
+        onClick={() => setShown(true)}
+        className={`fixed top-2 z-40 flex items-center gap-1 rounded-md border border-border bg-surface-1/90 px-1.5 py-1 text-[10px] text-gray-500 backdrop-blur hover:text-gray-300 ${sidebarOpen ? "left-[17rem]" : "left-2"}`}
+        title="Show the proxy-speed add-on"
+        data-testid="proxy-speed-restore"
+      >
+        <Gauge className="h-3 w-3" /> proxy
+      </button>
+    );
+  }
+
   return (
     <div
       className={`fixed top-2 z-40 w-60 rounded-lg border border-border bg-surface-1/95 backdrop-blur shadow-lg ${sidebarOpen ? "left-[17rem]" : "left-2"}`}
@@ -105,6 +136,15 @@ export function ProxySpeedBadge({ nativeName, sidebarOpen = true }: { nativeName
           {failed ? "unavailable" : row?.profile ?? "no proxied profile"}
         </span>
         {open ? <ChevronUp className="h-3 w-3 text-gray-600" /> : <ChevronDown className="h-3 w-3 text-gray-600" />}
+      </button>
+      <button
+        type="button"
+        onClick={() => setShown(false)}
+        className="absolute right-1 top-1 rounded p-0.5 text-gray-600 hover:text-gray-300"
+        title="Hide the proxy-speed add-on"
+        aria-label="Hide the proxy-speed add-on"
+      >
+        <span className="text-[10px] leading-none">✕</span>
       </button>
 
       {open && row && described && (
