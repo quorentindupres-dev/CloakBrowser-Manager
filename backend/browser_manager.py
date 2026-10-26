@@ -236,9 +236,16 @@ def _repair_native_extension_registration(profile_name: str) -> bool:
 
 
 def _native_profile_running(processes: str, profile_name: str) -> bool:
+    """True when a process is already running this profile's directory.
+
+    Profiles live in a group folder (profiles/<group>/<name>) since the grouped layout, but an older install, or a
+    profile created before the move, still runs from the flat path (profiles/<name>). Accept either, so a running
+    browser is never launched a second time against the same directory.
+    """
     profile_path = _resolve_native_profile_dir(profile_name)
-    needle = f"--user-data-dir={profile_path}"
-    return any(needle in line for line in processes.splitlines())
+    root = Path(os.getenv("CLOAK_NATIVE_PROFILES_ROOT", CLOAK_HOME / "profiles"))
+    needles = {f"--user-data-dir={profile_path}", f"--user-data-dir={root / profile_name}"}
+    return any(needle in line for line in processes.splitlines() for needle in needles)
 
 
 def _validate_transparent_proxy(url: str | None) -> None:

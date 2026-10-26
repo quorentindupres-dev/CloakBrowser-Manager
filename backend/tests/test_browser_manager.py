@@ -255,6 +255,10 @@ def test_repair_native_extension_registration_clears_disabled_state(tmp_path, mo
     (seed / "Secure Preferences").write_text(json.dumps({"extensions": {"settings": {extension_id: seed_registration}}}))
     (target / "Secure Preferences").write_text(json.dumps({"extensions": {"settings": {extension_id: {"disable_reasons": [16777216]}}}}))
     monkeypatch.setenv("CLOAK_NATIVE_PROFILES_ROOT", str(profiles))
+    # The seed is resolved from the real CLOAK_HOME unless it is pinned: on a machine that has one, the repair would
+    # copy that registration instead of this fixture's.
+    import backend.browser_manager as module
+    monkeypatch.setattr(module, "_resolve_bitwarden_seed_dir", lambda: profiles / "bitwarden-auth-seed")
 
     assert _repair_native_extension_registration("outlook-out-003") is True
 
@@ -264,6 +268,11 @@ def test_repair_native_extension_registration_clears_disabled_state(tmp_path, mo
 
 def test_native_profile_running_matches_only_exact_profile_path(monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/Users/test")))
+    # CLOAK_HOME is resolved at import time, so patching Path.home afterwards is not enough: pin the module constant
+    # the resolver actually reads.
+    import backend.browser_manager as module
+    monkeypatch.setattr(module, "CLOAK_HOME", Path("/Users/test/.cloakbrowser"))
+    monkeypatch.delenv("CLOAK_NATIVE_PROFILES_ROOT", raising=False)
     processes = "\n".join([
         "Chromium --user-data-dir=/Users/test/.cloakbrowser/profiles/linkedin-001",
         "Chromium --user-data-dir=/Users/test/.cloakbrowser/profiles/linkedin-001-old",
